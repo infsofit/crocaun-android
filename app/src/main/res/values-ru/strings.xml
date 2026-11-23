@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Crocaun</string>
+    <string name="nav_send">Отправить</string>
+    <string name="nav_receive">Получить</string>
+    <string name="nav_chat">Чат</string>
+    <string name="nav_history">История</string>
+    <string name="nav_settings">Настройки</string>
+    <string name="shell_body">Каркас приложения и сборка готовы. Передача файлов, чат и история пока не подключены.</string>
+    <string name="protocol_status">Протокольное ядро не подключено</string>
+    <string name="version_label">Версия %1$s</string>
+</resources>

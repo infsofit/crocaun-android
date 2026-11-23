@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Crocaun</string>
+    <string name="nav_send">Send</string>
+    <string name="nav_receive">Receive</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+    <string name="shell_body">The app shell and build pipeline are ready. File transfer, chat, and history are not connected yet.</string>
+    <string name="protocol_status">Protocol engine not connected</string>
+    <string name="version_label">Version %1$s</string>
+</resources>

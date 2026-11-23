@@ -1,0 +1,12 @@
+.gradle/
+.kotlin/
+.idea/
+local.properties
+**/build/
+*.iml
+.DS_Store
+
+# Never commit Android signing material or local secrets.
+*.jks
+*.keystore
+secrets.properties

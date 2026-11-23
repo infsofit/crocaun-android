@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#DAE9F2</color>
+    <color name="crocaun_blue">#1769C2</color>
+    <color name="crocaun_yellow">#FFE500</color>
+    <color name="crocaun_ink">#263746</color>
+    <color name="window_surface">#F5F9FC</color>
+</resources>
