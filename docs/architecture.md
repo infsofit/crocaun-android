@@ -1,31 +1,31 @@
 # Архитектура Crocaun Android
 
-## Решение для первой платформы
+## Платформа
 
-Приложение — нативный Android-клиент на Kotlin и Jetpack Compose. Это даёт прямой доступ к Android API для разрешений, фоновой работы, уведомлений, системного выбора файлов и защищённого хранения секретов. Windows GUI остаётся независимым и не переносится.
+Приложение — нативный Android-клиент на Kotlin и Jetpack Compose. Минимальная версия — Android 11 (API 30). Windows GUI остаётся независимым и не переносится.
 
-## Слои
+## Реализованный LAN-чат
 
-### Android UI (`app`)
+`app/src/main/java/com/infsofit/crocaun/chat/LanChatClient.kt` реализует первый Android `ChatBackend` для локальной Windows chat-сети:
 
-Compose-экраны отправки, получения, чата, истории и настроек. UI отображает состояние use cases, но не реализует криптографию или wire-протокол самостоятельно.
+- TCP listener и ручное подключение к peer на порту `29014`; JSON Lines и поля `hello`, `who`, `rooms`, `have`, `m`, `get`, `file` совместимы с `chatnet.go`.
+- PBKDF2-HMAC-SHA256 (`crocau-chat-v1`, 20 000 итераций), room ID и AES-256-GCM payload повторяют `chatcore.go`; Kotlin golden tests фиксируют ключ и room ID общей комнаты.
+- История записывается app-private JSONL из зашифрованных кадров. Android пароль комнаты не сохраняет.
+- LAN chat file offer переносит SAF `content://` выбранный документ во временное app-private staging и предоставляет прямую TCP-загрузку по `get`/`file`, совместимую с Windows local chat.
+- Источник одной сессии живёт в корне Compose приложения, поэтому соединение не останавливается при переключении вкладки. Экран History читает сообщения из тех же комнат.
 
-### Android platform adapters
+Discovery по UDP `29015` пока не реализован; peer вводится вручную. Internet/Nostr backend не реализован. Это означает только частичную совместимость чата: LAN-сообщения, комнаты, синхронизация истории и прямые chat attachments; Nostr события, подписи, статусы roster, общая очистка и Internet file hosting Android пока не поддерживает. Перед публичным production-использованием нужна живая interop-проверка Android ↔ Windows.
 
-Платформенная часть будет отвечать за Storage Access Framework и `content://` URI, безопасное хранение Android-настроек и паролей, а также foreground service/уведомления для длительной передачи и работы чата. Нельзя предполагать, что выбранный Android-файл доступен как обычный постоянный путь в файловой системе.
+LAN protocol шифрует chat frame содержимое, но не весь TCP транспорт. LAN-вложение передаётся напрямую без AES файлового шифрования, как в Windows local-chat backend. Не использовать его в недоверенных сетях.
 
-### Совместимое протокольное ядро
+## Основная передача Croc
 
-Кандидат на повторное использование — переносимые части Go-реализации `croc`/`crocaun`, собранные в Android AAR через `gomobile bind`. До выделения библиотеки требуется аудит Windows-зависимых пакетов, файловых путей, DPAPI, управления брандмауэром и запуска процессов. Go-пакет должен открывать узкий экспортируемый API для Kotlin и возвращать события/ошибки без зависимости от GUI.
+Windows основной transfer использует Croc CLI `github.com/schollz/croc/v10 v10.0.12`, кодирование Crocaun-пароля из `runner.go` и патч `patches/croc-v10.0.12-sendfile-race.patch`. Текущая Windows-обёртка — `package main`, запускает собственный EXE дочерним процессом и зависит от Windows UI/DPAPI/firewall слоёв. Прямой `gomobile bind` на эту обёртку не является рабочим Android API.
 
-### Совместимость чата и истории
+Будущий transfer module должен выделить отдельный portable Go-пакет с узким API send/receive/cancel/progress и повторно использовать точную Croc версию плюс Crocaun patch. Android adapter должен принимать SAF `content://`, stage-ить содержимое потоково, писать результат обратно через SAF, выполнять долговременную операцию с foreground service и хранить секреты через Android Keystore. Пока этот переносимый Go AAR не собран и не прошёл Android ↔ Windows interop tests, основные вкладки Send/Receive остаются заглушками; Android не должен обещать совместимость стандартной Croc-передачи.
 
-Отдельно исследуются `chatcore.go`, `chatfile.go`, `chatstore.go`, сетевые транспорты и формат файлов в Windows-репозитории. Интероперабельность передачи файлов сама по себе не гарантирует совместимость локальной истории чата; протокол, кодировка, идентификаторы участников и формат хранения проверяются отдельно.
+## Автоматизация релизов
 
-## Версионирование
+`.github/workflows/android.yml` запускается на push/PR для проверки, ежедневно и вручную для синхронизации. Скрипт `scripts/discover_releases.py` перебирает опубликованные стабильные Windows releases, принимает только канонические version tags и сверяет их с `gui_windows.go` на соответствующем теге. Для отсутствующих Android tags/releases workflow собирает APK, создаёт одинаковый Android tag и prerelease; если релиз без APK, asset добавляется повторно. Tag/release publication выполняется в том же run, который создал тег, так как tag push от `GITHUB_TOKEN` не должен запускать отдельный workflow. Права `contents: write` выдаются только publication job.
 
-Публичный релиз Windows — канонический номер версии. CI получает последний tag через публичный GitHub Releases API. Android-релиз использует тот же `versionName`/tag и создаётся только если такой Windows-релиз уже опубликован. Для Android `versionCode` используется монотонное числовое отображение версии.
-
-## Ограничения начального каркаса
-
-Первые APK подтверждают сборку, структуру ресурсов и автоматизацию CI. Они ещё не умеют передавать файлы или поддерживать чат; для реальных релизов нужны протокольные тесты Android ↔ Windows и отдельное решение о постоянной release-signing key.
+APK пока debug-signed. Это preview, а не публикация в Google Play; release signing key требует отдельного решения владельца.
