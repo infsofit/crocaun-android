@@ -3,6 +3,8 @@
 .idea/
 local.properties
 **/build/
+go-core/croc-patched/
+app/libs/crocaun-transfer.aar
 *.iml
 .DS_Store
 

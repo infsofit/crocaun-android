@@ -48,7 +48,18 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: "platforms;android-36 build-tools;36.0.0"
+          packages: "platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: |
+            go-core/go.mod
+            go-core/go.sum
+
+      - name: Build and test Croc Android AAR
+        run: scripts/build-transfer-aar.sh
 
       - name: Build and test
         run: >-
@@ -60,6 +71,14 @@ jobs:
         with:
           name: crocaun-android-v${{ needs.discover.outputs.version_name }}-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload transfer AAR for integration testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: crocaun-transfer-aar
+          path: app/libs/crocaun-transfer.aar
           if-no-files-found: error
           retention-days: 14
 

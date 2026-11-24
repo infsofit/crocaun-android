@@ -2,7 +2,7 @@
 
 Отдельный Android-клиент для проекта [crocaun](https://github.com/infsofit/crocaun). Цель — совместимая передача файлов и текста, чат и история; копировать интерфейс Windows-программы не требуется.
 
-> **Состояние:** реализован первый LAN-чат с совместимыми Windows параметрами шифрования, зашифрованной локальной историей и передачей файловых вложений в общей локальной сети. Основной Croc send/receive, Internet/Nostr-чат и автоматическое обнаружение устройств пока не реализованы. APK остаётся debug-подписанным preview.
+> **Состояние:** реализован первый LAN-чат с совместимыми Windows параметрами шифрования, зашифрованной локальной историей и передачей файловых вложений в общей локальной сети. Добавлено переносимое Go-ядро для будущей основной Croc-передачи и CI-сборка AAR, но Android UI, SAF-адаптер и живая Windows↔Android Croc-проверка ещё отсутствуют; Send/Receive не следует считать работающими. Internet/Nostr-чат и автоматическое обнаружение устройств также пока не реализованы. APK остаётся debug-подписанным preview.
 
 ![Оригинальная иконка Windows-программы Crocaun](assets/branding/crocau-windows-256.png)
 
@@ -13,7 +13,7 @@
 - LAN-чат подключается к Windows-клиенту по IP-адресу и TCP-порту `29014`. Для общего пароля комнаты используются те же PBKDF2-HMAC-SHA256 параметры, room ID, AES-256-GCM nonce/AAD и Base64 Raw Std формат, что и в Windows. Обмен — newline-delimited JSON с типами Windows `hello`, `rooms`, `have`, `m`, `get`, `file`.
 - История чата хранится в app-private `files/chat-lan/history/` как JSONL из зашифрованных кадров. Пароли комнат на диск не записываются: после перезапуска нужно повторно ввести пароль комнаты, чтобы открыть её историю.
 - Вложения чата выбираются и сохраняются через Android Storage Access Framework (`content://`). Чтобы Windows peer мог отдать вложение напрямую, исходник копируется в приватный каталог приложения, пока приложение запущено.
-- Основная передача Croc в Windows использует Croc CLI `v10.0.12` с Crocaun-патчем. Это отдельный протокол от чата. Android AAR ещё не выделен и не подключён, поэтому вкладки Send/Receive пока служат заглушками.
+- Основная передача Croc в Windows использует Croc `v10.0.12` с Crocaun race-патчем. Это отдельный протокол от чата. В `go-core/transfer` подготовлен узкий Go facade, а GitHub Actions собирает AAR и golden-тестирует password/relay mapping. AAR пока не подключён к Android UI; Send/Receive остаются заглушками до SAF-интеграции и Android↔Windows interop-тестов.
 
 ## Что поддерживается и чего пока нет
 
@@ -25,13 +25,23 @@
 
 ## Сборка
 
-В Android Studio откройте этот репозиторий и соберите `app` → `assembleDebug`. Из терминала:
+Обычную Android-сборку можно выполнить в Android Studio (`app` → `assembleDebug`) или из терминала:
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-GitHub Actions собирает и тестирует APK при push в `main` и pull request. Ежедневный запуск и ручной `workflow_dispatch` сверяют опубликованные стабильные Windows releases с исходным `appVersion`, создают отсутствующий Android-тег той же версии и публикуют prerelease с APK. Если релиз уже есть, но APK asset отсутствует, workflow дозагружает его. Windows-репозиторий и его workflow не изменяются. GitHub `GITHUB_TOKEN` не запускает второй workflow от созданного тега, поэтому обнаружение, сборка и публикация происходят в одном запуске.
+Для проверки Go-модуля и локальной сборки AAR нужны Go 1.26+, Android SDK и NDK `27.2.12479018`:
+
+```bash
+scripts/build-transfer-aar.sh
+```
+
+Скрипт получает Croc v10.0.12 с закреплённого upstream commit, применяет Crocaun race-fix и Android-specific патчи, запускает Go-тесты, проверяет Java API и создаёт `app/libs/crocaun-transfer.aar`. Android-патчи запрещают вывод секрета в logcat и отключают ненужный startup DNS lookup, поскольку приложение явно задаёт relay. Эта AAR сейчас не включается в APK автоматически. GitHub Actions запускает её проверку при push в `main` и pull request и публикует отдельным временным artifact.
+
+Ежедневный запуск и ручной `workflow_dispatch` сверяют опубликованные стабильные Windows releases с исходным `appVersion`, создают отсутствующий Android-тег той же версии и публикуют prerelease с APK. Если релиз уже есть, но APK asset отсутствует, workflow дозагружает его. Windows-репозиторий и его workflow не изменяются. GitHub `GITHUB_TOKEN` не запускает второй workflow от созданного тега, поэтому обнаружение, сборка и публикация происходят в одном запуске.
+
+План этапов и условия готовности функциональных релизов находятся в [`docs/release-roadmap.md`](docs/release-roadmap.md).
 
 ## Нумерация версий
 

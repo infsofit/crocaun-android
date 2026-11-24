@@ -1,0 +1,21 @@
+diff --git a/src/models/constants.go b/src/models/constants.go
+--- a/src/models/constants.go
++++ b/src/models/constants.go
+@@ -6,6 +6,7 @@
+ 	"net"
+ 	"os"
+ 	"path"
++	"runtime"
+ 	"time"
+ 
+ 	"github.com/schollz/croc/v10/src/utils"
+@@ -58,6 +59,9 @@
+ func init() {
+ 	log.SetLevel("info")
+ 	log.SetOutput(os.Stderr)
++	if runtime.GOOS == "android" {
++		return // Android always supplies an explicit Crocaun relay; avoid startup DNS.
++	}
+ 	doRemember := false
+ 	for _, flag := range os.Args {
+ 		if flag == "--internal-dns" {

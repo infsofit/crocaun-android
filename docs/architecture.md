@@ -22,10 +22,14 @@ LAN protocol шифрует chat frame содержимое, но не весь 
 
 Windows основной transfer использует Croc CLI `github.com/schollz/croc/v10 v10.0.12`, кодирование Crocaun-пароля из `runner.go` и патч `patches/croc-v10.0.12-sendfile-race.patch`. Текущая Windows-обёртка — `package main`, запускает собственный EXE дочерним процессом и зависит от Windows UI/DPAPI/firewall слоёв. Прямой `gomobile bind` на эту обёртку не является рабочим Android API.
 
-Будущий transfer module должен выделить отдельный portable Go-пакет с узким API send/receive/cancel/progress и повторно использовать точную Croc версию плюс Crocaun patch. Android adapter должен принимать SAF `content://`, stage-ить содержимое потоково, писать результат обратно через SAF, выполнять долговременную операцию с foreground service и хранить секреты через Android Keystore. Пока этот переносимый Go AAR не собран и не прошёл Android ↔ Windows interop tests, основные вкладки Send/Receive остаются заглушками; Android не должен обещать совместимость стандартной Croc-передачи.
+В `go-core/transfer` добавлен отдельный portable Go-фасад поверх Croc API. `scripts/prepare-croc-go.sh` загружает upstream Croc по зафиксированному commit v10.0.12 и применяет Windows race-fix плюс Android-патчи: они скрывают Croc secret от stderr/logcat и пропускают ненужный startup DNS lookup, так как facade задаёт relay явно. Фасад повторяет Windows password mapping и password-derived relay order; golden unit tests фиксируют эти значения и базовые Croc options. `scripts/build-transfer-aar.sh` запускает тесты, проверяет Java signatures через gobind и собирает Android AAR через gomobile; workflow сохраняет его как временный CI artifact.
+
+Это пока не пользовательская передача: AAR не подключён к Compose-экранам, SAF staging/export adapter, foreground service, отмена и достоверный прогресс не реализованы, а живая Android ↔ Windows Croc interop-проверка ещё не пройдена. Текущий facade синхронен; его следует вызывать только вне UI-потока и не выпускать как готовую функцию. Основные вкладки Send/Receive остаются заглушками.
 
 ## Автоматизация релизов
 
 `.github/workflows/android.yml` запускается на push/PR для проверки, ежедневно и вручную для синхронизации. Скрипт `scripts/discover_releases.py` перебирает опубликованные стабильные Windows releases, принимает только канонические version tags и сверяет их с `gui_windows.go` на соответствующем теге. Для отсутствующих Android tags/releases workflow собирает APK, создаёт одинаковый Android tag и prerelease; если релиз без APK, asset добавляется повторно. Tag/release publication выполняется в том же run, который создал тег, так как tag push от `GITHUB_TOKEN` не должен запускать отдельный workflow. Права `contents: write` выдаются только publication job.
 
 APK пока debug-signed. Это preview, а не публикация в Google Play; release signing key требует отдельного решения владельца.
+
+Последовательность функциональных gates и правило временных CI-сборок описаны в [`docs/release-roadmap.md`](release-roadmap.md).
