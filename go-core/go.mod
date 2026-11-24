@@ -26,6 +26,7 @@ require (
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
+	golang.org/x/mobile v0.0.0-20261117202452-47699113848a // indirect
 	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.23.0 // indirect

@@ -31,6 +31,8 @@ grep -Fq 'public native String status();' "$SESSION_API"
 
 gomobile init
 mkdir -p "$ROOT/app/libs"
+# Keep golang.org/x/mobile in go-core/go.mod: gomobile's module-mode resolver
+# requires golang.org/x/mobile/bind to exist in the current module graph.
 # anet uses go:linkname for net.zoneCache; the Croc mobile facade disables
 # local discovery, and anet documents this linker flag for Go 1.23+.
 gomobile bind \
