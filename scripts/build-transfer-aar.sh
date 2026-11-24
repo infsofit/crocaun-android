@@ -31,9 +31,12 @@ grep -Fq 'public native String status();' "$SESSION_API"
 
 gomobile init
 mkdir -p "$ROOT/app/libs"
+# anet uses go:linkname for net.zoneCache; the Croc mobile facade disables
+# local discovery, and anet documents this linker flag for Go 1.23+.
 gomobile bind \
   -target=android \
   -androidapi=30 \
   -javapkg=com.infsofit.crocaun \
+  -ldflags=-checklinkname=0 \
   -o "$ROOT/app/libs/crocaun-transfer.aar" \
   github.com/infsofit/crocaun-android/go-core/transfer

@@ -24,9 +24,8 @@ require (
 	github.com/schollz/progressbar/v3 v3.14.6 // indirect
 	github.com/tscholl2/siec v0.0.0-20240310163802-c2c6f6198406 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
-	github.com/wlynxg/anet v0.0.3 // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
-	golang.org/x/mobile v0.0.0-20261117202452-47699113848a // indirect
 	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.23.0 // indirect

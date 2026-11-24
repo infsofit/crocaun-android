@@ -37,7 +37,7 @@
 scripts/build-transfer-aar.sh
 ```
 
-Скрипт получает Croc v10.0.12 с закреплённого upstream commit, применяет Crocaun race-fix и Android-specific патчи, запускает Go-тесты, проверяет Java API и создаёт `app/libs/crocaun-transfer.aar`. Android-патчи запрещают вывод секрета в logcat и отключают ненужный startup DNS lookup, поскольку приложение явно задаёт relay. Эта AAR сейчас не включается в APK автоматически. GitHub Actions запускает её проверку при push в `main` и pull request и публикует отдельным временным artifact.
+Скрипт получает Croc v10.0.12 с закреплённого upstream commit, применяет Crocaun race-fix и Android-specific патчи, запускает Go-тесты, проверяет Java API и создаёт `app/libs/crocaun-transfer.aar`. Для Android привязки задан linker flag, документированный зависимостью `anet` для обхода Go 1.23+ проверки её `go:linkname`; локальное обнаружение при этом отключено в Croc options. Android-патчи запрещают вывод секрета в logcat и отключают ненужный startup DNS lookup, поскольку приложение явно задаёт relay. Эта AAR сейчас не включается в APK автоматически. GitHub Actions запускает её проверку при push в `main` и pull request и публикует отдельным временным artifact.
 
 Ежедневный запуск и ручной `workflow_dispatch` сверяют опубликованные стабильные Windows releases с исходным `appVersion`, создают отсутствующий Android-тег той же версии и публикуют prerelease с APK. Если релиз уже есть, но APK asset отсутствует, workflow дозагружает его. Windows-репозиторий и его workflow не изменяются. GitHub `GITHUB_TOKEN` не запускает второй workflow от созданного тега, поэтому обнаружение, сборка и публикация происходят в одном запуске.
 
