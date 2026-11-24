@@ -120,7 +120,7 @@ jobs:
           set -euo pipefail
           apk="crocaun-android-${TAG}-preview.apk"
           source_sha="$(git rev-parse HEAD)"
-          notes="Preview APK aligned to the published Windows release ${TAG}. This artifact is debug-signed and is not a Google Play production release."
+          notes="Early Android preview aligned to the published Windows release ${TAG}. It includes LAN chat only; primary Croc send/receive and Internet chat are not implemented yet. This APK is debug-signed and is not a Google Play production release."
           if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "$apk" --repo "$REPOSITORY" --clobber
           else
