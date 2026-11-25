@@ -6,18 +6,27 @@ plugins {
 val crocaunVersion = providers.gradleProperty("crocaunVersion").orElse("1.11").get()
 
 fun versionCodeFor(version: String): Int {
-    val parts = version.split('.').map { part -> part.toIntOrNull() }
-    require(parts.size in 2..3 && parts.all { it != null }) {
-        "crocaunVersion must have two or three numeric components, e.g. 1.11 or 1.11.1"
+    val match = Regex(
+        """^([1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:-android\.([1-9]\d?))?$""",
+    ).matchEntire(version)
+    require(match != null) {
+        "crocaunVersion must be 1.11, 1.11.1, 1.11-android.1, or 1.11.1-android.1"
     }
 
-    val numbers = parts.filterNotNull().toMutableList()
-    while (numbers.size < 3) numbers += 0
-    val (major, minor, patch) = numbers
-    require(major in 1..2000 && minor in 0..999 && patch in 0..999) {
-        "Version components are outside the supported Android versionCode range: $version"
+    val major = match.groupValues[1].toLong()
+    val minor = match.groupValues[2].toLong()
+    val patch = match.groupValues[3].ifEmpty { "0" }.toLong()
+    val androidSerial = match.groupValues[4].ifEmpty { "0" }.toLong()
+    require(minor <= 999 && patch <= 999 && androidSerial <= 99) {
+        "Version components are outside the supported release range: $version"
     }
-    return major * 1_000_000 + minor * 1_000 + patch
+
+    val windowsVersionCode = major * 1_000_000L + minor * 1_000L + patch
+    val versionCode = windowsVersionCode * 100L + androidSerial
+    require(versionCode in 1..2_100_000_000L) {
+        "Version is outside the supported Android versionCode range: $version"
+    }
+    return versionCode.toInt()
 }
 
 android {

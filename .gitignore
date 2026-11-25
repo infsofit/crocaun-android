@@ -12,3 +12,7 @@ app/libs/crocaun-transfer.aar
 *.jks
 *.keystore
 secrets.properties
+
+# Python test and helper bytecode.
+__pycache__/
+*.py[cod]
