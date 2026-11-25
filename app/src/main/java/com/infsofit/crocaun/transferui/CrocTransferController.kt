@@ -35,20 +35,23 @@ internal class CrocTransferController(context: Context) : Closeable {
         Thread(task, "crocaun-croc-status").apply { isDaemon = true }
     }
 
-    fun stageSelectedDocument(uri: Uri, onComplete: (Result<TransferItem>) -> Unit) {
+    fun stageSelectedDocuments(uris: List<Uri>, onComplete: (Result<List<TransferItem>>) -> Unit) {
         worker.execute {
-            val result = runCatching { copyDocumentToPrivateStaging(uri) }
+            val result = runCatching { copyDocumentsToPrivateStaging(uris) }
             mainHandler.post { onComplete(result) }
         }
     }
 
-    fun send(item: TransferItem, password: String, onStatus: (String) -> Unit, onComplete: (Result<Unit>) -> Unit) {
+    fun send(items: List<TransferItem>, password: String, onStatus: (String) -> Unit, onComplete: (Result<Unit>) -> Unit) {
         worker.execute {
             val result = try {
-                val pathsJson = JSONArray().put(item.file.absolutePath).toString()
+                require(items.isNotEmpty()) { "Select at least one file." }
+                val pathsJson = JSONArray().apply {
+                    items.forEach { put(it.file.absolutePath) }
+                }.toString()
                 val session = Transfer.newTransferSession("send", password, pathsJson, "", "", "")
                 runSession(session, onStatus) { session.run() }
-                deleteStagingDirectory(item.stagingDirectory)
+                items.map { it.stagingDirectory }.distinct().forEach(::deleteStagingDirectory)
                 Result.success(Unit)
             } catch (error: Exception) {
                 Result.failure(error)
@@ -111,26 +114,33 @@ internal class CrocTransferController(context: Context) : Closeable {
         }
     }
 
-    fun discard(item: TransferItem) {
-        worker.execute { deleteStagingDirectory(item.stagingDirectory) }
+    fun discard(items: List<TransferItem>) {
+        worker.execute {
+            items.map { it.stagingDirectory }.distinct().forEach(::deleteStagingDirectory)
+        }
     }
 
-    private fun copyDocumentToPrivateStaging(uri: Uri): TransferItem {
-        val originalName = queryDisplayName(uri) ?: uri.lastPathSegment ?: "crocaun-file"
-        val safeName = windowsCompatibleFileName(originalName)
+    private fun copyDocumentsToPrivateStaging(uris: List<Uri>): List<TransferItem> {
+        if (uris.isEmpty()) throw IOException("No files were selected.")
         val directory = newStagingDirectory("send")
-        val destination = File(directory, safeName)
         try {
-            val input = appContext.contentResolver.openInputStream(uri)
-                ?: throw IOException("Android could not read the selected document.")
-            input.use { source ->
-                FileOutputStream(destination).use { target -> source.copyTo(target, DEFAULT_BUFFER_SIZE) }
+            val originalNames = uris.map { uri ->
+                queryDisplayName(uri) ?: uri.lastPathSegment ?: "crocaun-file"
+            }
+            val safeNames = uniqueWindowsCompatibleFileNames(originalNames)
+            return uris.mapIndexed { index, uri ->
+                val destination = File(directory, safeNames[index])
+                val input = appContext.contentResolver.openInputStream(uri)
+                    ?: throw IOException("Android could not read ${safeNames[index]}.")
+                input.use { source ->
+                    FileOutputStream(destination).use { target -> source.copyTo(target, DEFAULT_BUFFER_SIZE) }
+                }
+                TransferItem(destination, safeNames[index], safeNames[index], directory)
             }
         } catch (error: Exception) {
             deleteStagingDirectory(directory)
             throw error
         }
-        return TransferItem(destination, safeName, safeName, directory)
     }
 
     private fun queryDisplayName(uri: Uri): String? {
@@ -198,7 +208,7 @@ internal fun windowsCompatibleFileName(name: String): String {
                 append(character)
             }
         }
-    }.trim().trimEnd('.', ' ').take(180)
+    }.trim().trimEnd('.', ' ').take(MAX_WINDOWS_FILE_NAME_LENGTH)
 
     val candidate = replaced.ifBlank { "crocaun-file" }
     val baseName = candidate.substringBefore('.').uppercase(Locale.ROOT)
@@ -206,3 +216,27 @@ internal fun windowsCompatibleFileName(name: String): String {
         baseName.matches(Regex("(?:COM|LPT)[1-9]"))
     return if (reserved) "_$candidate" else candidate
 }
+
+internal fun uniqueWindowsCompatibleFileNames(names: List<String>): List<String> {
+    val used = mutableSetOf<String>()
+    return names.map { original ->
+        val safe = windowsCompatibleFileName(original)
+        if (used.add(safe.lowercase(Locale.ROOT))) return@map safe
+
+        val extensionStart = safe.lastIndexOf('.').takeIf { it > 0 } ?: safe.length
+        val base = safe.substring(0, extensionStart)
+        val extension = safe.substring(extensionStart)
+        var serial = 2
+        while (true) {
+            val suffix = " ($serial)"
+            val maxBaseLength = (MAX_WINDOWS_FILE_NAME_LENGTH - suffix.length - extension.length).coerceAtLeast(1)
+            val candidate = base.take(maxBaseLength) + suffix + extension
+            if (used.add(candidate.lowercase(Locale.ROOT))) return@map candidate
+            serial++
+        }
+        @Suppress("UNREACHABLE_CODE")
+        safe
+    }
+}
+
+private const val MAX_WINDOWS_FILE_NAME_LENGTH = 180

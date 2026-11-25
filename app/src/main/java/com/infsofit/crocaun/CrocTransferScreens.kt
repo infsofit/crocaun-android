@@ -42,7 +42,7 @@ internal class CrocTransferUiState {
     var busy by mutableStateOf(false)
     var stagingSend by mutableStateOf(false)
     var exporting by mutableStateOf(false)
-    var selectedSendFile by mutableStateOf<TransferItem?>(null)
+    var selectedSendItems by mutableStateOf<List<TransferItem>>(emptyList())
     var sendPassword by mutableStateOf("")
     var sendStatus by mutableStateOf<String?>(null)
     var sendError by mutableStateOf<String?>(null)
@@ -57,18 +57,18 @@ internal class CrocTransferUiState {
 @Composable
 internal fun CrocSendScreen(controller: CrocTransferController, state: CrocTransferUiState) {
     val context = LocalContext.current
-    val selectDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+    val selectDocuments = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
             state.sendError = null
-            state.sendStatus = context.getString(R.string.transfer_copying_file)
+            state.sendStatus = context.getString(R.string.transfer_copying_files, uris.size)
             state.stagingSend = true
-            state.selectedSendFile?.let(controller::discard)
-            state.selectedSendFile = null
-            controller.stageSelectedDocument(uri) { result ->
+            controller.discard(state.selectedSendItems)
+            state.selectedSendItems = emptyList()
+            controller.stageSelectedDocuments(uris) { result ->
                 state.stagingSend = false
-                result.onSuccess { item ->
-                    state.selectedSendFile = item
-                    state.sendStatus = context.getString(R.string.transfer_file_ready)
+                result.onSuccess { items ->
+                    state.selectedSendItems = items
+                    state.sendStatus = context.getString(R.string.transfer_files_ready, items.size)
                 }.onFailure { error ->
                     state.sendStatus = null
                     state.sendError = readableError(context.getString(R.string.transfer_stage_failed), error, state.sendPassword)
@@ -85,17 +85,23 @@ internal fun CrocSendScreen(controller: CrocTransferController, state: CrocTrans
         Text(stringResource(R.string.transfer_send_description), style = MaterialTheme.typography.bodyMedium)
         OutlinedButton(
             enabled = !state.busy && !state.stagingSend && !state.exporting,
-            onClick = { selectDocument.launch(arrayOf("*/*")) },
+            onClick = { selectDocuments.launch(arrayOf("*/*")) },
             modifier = Modifier.fillMaxWidth(),
         ) {
             Icon(Icons.Filled.AttachFile, contentDescription = null)
-            Text(stringResource(R.string.transfer_choose_file), modifier = Modifier.padding(start = 8.dp))
+            Text(stringResource(R.string.transfer_choose_files), modifier = Modifier.padding(start = 8.dp))
         }
-        state.selectedSendFile?.let { item ->
+        if (state.selectedSendItems.isNotEmpty()) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.transfer_selected_file), style = MaterialTheme.typography.labelMedium)
-                    Text(item.displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.transfer_selected_files, state.selectedSendItems.size), style = MaterialTheme.typography.labelMedium)
+                    state.selectedSendItems.take(MAX_VISIBLE_SELECTED_FILES).forEach { item ->
+                        Text(item.displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    }
+                    val hiddenCount = state.selectedSendItems.size - MAX_VISIBLE_SELECTED_FILES
+                    if (hiddenCount > 0) {
+                        Text(stringResource(R.string.transfer_more_files, hiddenCount), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }
@@ -109,21 +115,22 @@ internal fun CrocSendScreen(controller: CrocTransferController, state: CrocTrans
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
-            enabled = !state.busy && !state.stagingSend && !state.exporting && state.selectedSendFile != null && state.sendPassword.isNotBlank(),
+            enabled = !state.busy && !state.stagingSend && !state.exporting && state.selectedSendItems.isNotEmpty() && state.sendPassword.isNotBlank(),
             onClick = {
-                val item = state.selectedSendFile ?: return@Button
+                val items = state.selectedSendItems
+                if (items.isEmpty()) return@Button
                 state.sendError = null
                 state.sendStatus = context.getString(R.string.transfer_connecting)
                 state.busy = true
                 controller.send(
-                    item,
+                    items,
                     state.sendPassword,
                     onStatus = { status -> if (state.busy) state.sendStatus = displayStatus(context, status) },
                     onComplete = { result ->
                         state.busy = false
                         result.onSuccess {
-                            state.sendStatus = context.getString(R.string.transfer_send_complete)
-                            state.selectedSendFile = null
+                            state.sendStatus = context.getString(R.string.transfer_send_complete, items.size)
+                            state.selectedSendItems = emptyList()
                             state.sendPassword = ""
                         }.onFailure { error ->
                             state.sendStatus = null
@@ -259,3 +266,5 @@ private fun readableError(prefix: String, error: Throwable, password: String): S
     val detail = redacted.ifBlank { error.javaClass.simpleName }
     return "$prefix: $detail"
 }
+
+private const val MAX_VISIBLE_SELECTED_FILES = 5
