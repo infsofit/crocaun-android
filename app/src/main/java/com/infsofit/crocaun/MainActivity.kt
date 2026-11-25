@@ -48,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.infsofit.crocaun.chat.LanChatClient
+import com.infsofit.crocaun.transferui.CrocTransferController
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,6 +78,8 @@ private fun CrocaunApp() {
     val chatClient = remember(context) {
         LanChatClient(context) { mainHandler.post { networkRevision++ } }
     }
+    val transferController = remember(context) { CrocTransferController(context) }
+    val transferState = remember(transferController) { CrocTransferUiState() }
     DisposableEffect(chatClient) {
         val start = chatClient.start()
         startupError = start.exceptionOrNull()?.message
@@ -85,6 +88,9 @@ private fun CrocaunApp() {
             if (commonRoom.isFailure) startupError = commonRoom.exceptionOrNull()?.message
         }
         onDispose { chatClient.close() }
+    }
+    DisposableEffect(transferController) {
+        onDispose { transferController.close() }
     }
 
     var selected by rememberSaveable { mutableStateOf(Destination.Send.name) }
@@ -115,6 +121,8 @@ private fun CrocaunApp() {
             color = MaterialTheme.colorScheme.background,
         ) {
             when (currentDestination) {
+                Destination.Send -> CrocSendScreen(transferController, transferState)
+                Destination.Receive -> CrocReceiveScreen(transferController, transferState)
                 Destination.Chat -> ChatScreen(chatClient, startupError, networkRevision)
                 Destination.History -> ChatHistoryScreen(chatClient, networkRevision)
                 else -> PlaceholderScreen(currentDestination)

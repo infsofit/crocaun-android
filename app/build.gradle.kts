@@ -51,11 +51,9 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    if (providers.gradleProperty("includeCrocTransferAar").orNull == "true") {
-        val crocTransferAar = file("libs/crocaun-transfer.aar")
-        require(crocTransferAar.exists()) { "Run scripts/build-transfer-aar.sh before including the Croc AAR" }
-        implementation(files(crocTransferAar))
-    }
+    val crocTransferAar = file("libs/crocaun-transfer.aar")
+    require(crocTransferAar.exists()) { "Run scripts/build-transfer-aar.sh before building the Android app" }
+    implementation(files(crocTransferAar))
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.google.code.gson:gson:2.13.2")
 
