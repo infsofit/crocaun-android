@@ -26,6 +26,7 @@ gobind -lang=java -javapkg=com.infsofit.crocaun -outdir="$BINDING_DIR" \
 JAVA_API="$BINDING_DIR/java/com/infsofit/crocaun/transfer/Transfer.java"
 SESSION_API="$BINDING_DIR/java/com/infsofit/crocaun/transfer/TransferSession.java"
 grep -Fq 'newTransferSession(String mode, String password, String pathsJSON, String outputDir, String relay, String relayPassword) throws Exception;' "$JAVA_API"
+grep -Fq 'checkRelayServers(long timeoutMillis)' "$JAVA_API"
 grep -Fq 'public native void run() throws Exception;' "$SESSION_API"
 grep -Fq 'public native String status();' "$SESSION_API"
 

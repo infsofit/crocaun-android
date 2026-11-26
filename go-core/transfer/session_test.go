@@ -2,10 +2,15 @@ package transfer
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/schollz/croc/v10/src/comm"
 )
 
 func TestMakeSecretMatchesWindowsGoldenValues(t *testing.T) {
@@ -92,5 +97,64 @@ func TestCrocOptionsMatchWindowsBaseline(t *testing.T) {
 	receiveOptions := crocOptions(receiver, "3.getcroc.com:9009")
 	if receiveOptions.IsSender || !receiveOptions.Overwrite || receiveOptions.IgnoreStdin {
 		t.Fatalf("unexpected receiver flags: %#v", receiveOptions)
+	}
+}
+
+func TestProbeRelayAddressUsesCrocPingPong(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer conn.Close()
+		channel := comm.New(conn)
+		message, receiveErr := channel.Receive()
+		if receiveErr != nil {
+			serverErr <- receiveErr
+			return
+		}
+		if string(message) != "ping" {
+			serverErr <- errors.New("expected ping")
+			return
+		}
+		serverErr <- channel.Send([]byte("pong"))
+	}()
+	rtt, err := probeRelayAddress(listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rtt < 0 {
+		t.Fatalf("negative round-trip time: %s", rtt)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProbeRelayAddressRejectsNonPongResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		channel := comm.New(conn)
+		_, _ = channel.Receive()
+		_ = channel.Send([]byte("not-pong"))
+	}()
+	if _, err := probeRelayAddress(listener.Addr().String(), time.Second); err == nil {
+		t.Fatal("expected a non-pong relay response to fail")
 	}
 }

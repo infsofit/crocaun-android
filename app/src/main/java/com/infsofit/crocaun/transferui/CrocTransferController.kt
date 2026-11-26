@@ -10,10 +10,12 @@ import com.infsofit.crocaun.transfer.TransferSession
 import org.json.JSONArray
 import java.io.Closeable
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -25,15 +27,27 @@ internal data class TransferItem(
     val stagingDirectory: File,
 )
 
+internal data class RelayServerCheck(
+    val address: String,
+    val available: Boolean,
+    val rttMillis: Long?,
+    val error: String?,
+)
+
 internal class CrocTransferController(context: Context) : Closeable {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "crocaun-croc-transfer").apply { isDaemon = true }
     }
+    private val networkWorker = Executors.newFixedThreadPool(3) { task ->
+        Thread(task, "crocaun-network-discovery").apply { isDaemon = true }
+    }
     private val statusPoller = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "crocaun-croc-status").apply { isDaemon = true }
     }
+    private val discoveryId = UUID.randomUUID().toString().replace("-", "")
+    private val activeDiscoveries = ConcurrentHashMap.newKeySet<LanDiscoveryOperation>()
 
     fun stageSelectedDocuments(uris: List<Uri>, onComplete: (Result<List<TransferItem>>) -> Unit) {
         worker.execute {
@@ -42,14 +56,64 @@ internal class CrocTransferController(context: Context) : Closeable {
         }
     }
 
-    fun send(items: List<TransferItem>, password: String, onStatus: (String) -> Unit, onComplete: (Result<Unit>) -> Unit) {
+    fun stageManualPaths(input: String, onComplete: (Result<List<TransferItem>>) -> Unit) {
+        worker.execute {
+            val result = runCatching { copyManualPathsToPrivateStaging(input) }
+            mainHandler.post { onComplete(result) }
+        }
+    }
+
+    fun discoverLanPeers(wantedRole: String, onComplete: (Result<List<LanPeer>>) -> Unit): LanDiscoveryOperation {
+        val operation = LanDiscoveryOperation()
+        activeDiscoveries.add(operation)
+        networkWorker.execute {
+            val result = runCatching { operation.scan(discoveryId, wantedRole) }
+            activeDiscoveries.remove(operation)
+            if (!operation.isCancelled()) {
+                mainHandler.post {
+                    if (!operation.isCancelled()) onComplete(result)
+                }
+            }
+        }
+        return operation
+    }
+
+    fun checkRelayServers(
+        timeoutMillis: Long = DEFAULT_RELAY_CHECK_TIMEOUT_MS,
+        onComplete: (Result<List<RelayServerCheck>>) -> Unit,
+    ) {
+        networkWorker.execute {
+            val result = runCatching {
+                val encoded = Transfer.checkRelayServers(timeoutMillis)
+                val json = JSONArray(encoded)
+                (0 until json.length()).map { index ->
+                    val item = json.getJSONObject(index)
+                    RelayServerCheck(
+                        address = item.getString("address"),
+                        available = item.getBoolean("available"),
+                        rttMillis = if (item.has("rttMillis")) item.getLong("rttMillis") else null,
+                        error = item.optString("error").takeIf(String::isNotBlank),
+                    )
+                }
+            }
+            mainHandler.post { onComplete(result) }
+        }
+    }
+
+    fun send(
+        items: List<TransferItem>,
+        password: String,
+        relayAddress: String = "",
+        onStatus: (String) -> Unit,
+        onComplete: (Result<Unit>) -> Unit,
+    ) {
         worker.execute {
             val result = try {
                 require(items.isNotEmpty()) { "Select at least one file." }
                 val pathsJson = JSONArray().apply {
                     items.forEach { put(it.file.absolutePath) }
                 }.toString()
-                val session = Transfer.newTransferSession("send", password, pathsJson, "", "", "")
+                val session = Transfer.newTransferSession("send", password, pathsJson, "", relayAddress, "")
                 runSession(session, onStatus) { session.run() }
                 items.map { it.stagingDirectory }.distinct().forEach(::deleteStagingDirectory)
                 Result.success(Unit)
@@ -60,7 +124,12 @@ internal class CrocTransferController(context: Context) : Closeable {
         }
     }
 
-    fun receive(password: String, onStatus: (String) -> Unit, onComplete: (Result<List<TransferItem>>) -> Unit) {
+    fun receive(
+        password: String,
+        relayAddress: String = "",
+        onStatus: (String) -> Unit,
+        onComplete: (Result<List<TransferItem>>) -> Unit,
+    ) {
         worker.execute {
             val stagingDirectory = try {
                 newStagingDirectory("receive")
@@ -75,7 +144,7 @@ internal class CrocTransferController(context: Context) : Closeable {
                     password,
                     "[]",
                     stagingDirectory.absolutePath,
-                    "",
+                    relayAddress,
                     "",
                 )
                 runSession(session, onStatus) { session.run() }
@@ -143,6 +212,25 @@ internal class CrocTransferController(context: Context) : Closeable {
         }
     }
 
+    private fun copyManualPathsToPrivateStaging(input: String): List<TransferItem> {
+        val sources = validateManualPathFiles(parseManualPathInput(input))
+        val directory = newStagingDirectory("send")
+        try {
+            val safeNames = uniqueWindowsCompatibleFileNames(sources.map(File::getName))
+            return sources.mapIndexed { index, source ->
+                val safeName = safeNames[index]
+                val destination = File(directory, safeName)
+                FileInputStream(source).use { inputStream ->
+                    FileOutputStream(destination).use { output -> inputStream.copyTo(output, DEFAULT_BUFFER_SIZE) }
+                }
+                TransferItem(destination, safeName, safeName, directory)
+            }
+        } catch (error: Exception) {
+            deleteStagingDirectory(directory)
+            throw error
+        }
+    }
+
     private fun queryDisplayName(uri: Uri): String? {
         return appContext.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
@@ -190,12 +278,15 @@ internal class CrocTransferController(context: Context) : Closeable {
     }
 
     override fun close() {
+        activeDiscoveries.forEach(LanDiscoveryOperation::cancel)
         worker.shutdown()
+        networkWorker.shutdownNow()
         statusPoller.shutdownNow()
     }
 
     private companion object {
         const val DEFAULT_BUFFER_SIZE = 64 * 1024
+        const val DEFAULT_RELAY_CHECK_TIMEOUT_MS = 4_000L
     }
 }
 

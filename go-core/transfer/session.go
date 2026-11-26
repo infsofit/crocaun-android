@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/schollz/croc/v10/src/comm"
 	"github.com/schollz/croc/v10/src/croc"
 )
 
@@ -31,6 +34,71 @@ var (
 	}
 	workingDirectoryMu sync.Mutex
 )
+
+type relayCheckResult struct {
+	Address   string `json:"address"`
+	Available bool   `json:"available"`
+	RTTMillis int64  `json:"rttMillis,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// CheckRelayServers checks the public Croc relay pool using the same ping/pong
+// protocol as Windows Crocaun and returns ordered JSON for the Android UI.
+func CheckRelayServers(timeoutMillis int64) string {
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout < time.Second {
+		timeout = 4 * time.Second
+	}
+	if timeout > 10*time.Second {
+		timeout = 10 * time.Second
+	}
+	results := make([]relayCheckResult, len(publicRelays))
+	var wg sync.WaitGroup
+	for i, address := range publicRelays {
+		results[i].Address = address
+		wg.Add(1)
+		go func(i int, address string) {
+			defer wg.Done()
+			rtt, err := probeRelayAddress(address, timeout)
+			if err != nil {
+				results[i].Error = err.Error()
+				return
+			}
+			results[i].Available = true
+			results[i].RTTMillis = rtt.Milliseconds()
+		}(i, address)
+	}
+	wg.Wait()
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func probeRelayAddress(address string, timeout time.Duration) (time.Duration, error) {
+	started := time.Now()
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return 0, err
+	}
+	channel := comm.New(conn)
+	if err := channel.Send([]byte("ping")); err != nil {
+		return 0, err
+	}
+	response, err := channel.Receive()
+	if err != nil {
+		return 0, err
+	}
+	if string(response) != "pong" {
+		return 0, errors.New("relay did not return pong")
+	}
+	return time.Since(started), nil
+}
 
 // TransferSession is the narrow mobile facade for one standard Croc file transfer.
 // Run is synchronous; Android must call it off the main thread and keep the
