@@ -14,10 +14,15 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -62,6 +67,10 @@ class LanChatClient(
 ) : Closeable {
     companion object {
         const val TCP_PORT = 29014
+        private const val DISCOVERY_PORT = 29015
+        private const val DISCOVERY_REQUEST_PREFIX = "CROCAUCHAT1?"
+        private const val DISCOVERY_RESPONSE_PREFIX = "CROCAUCHAT1!"
+        private const val MAX_DISCOVERY_REQUEST_BYTES = 512
         private const val MAX_LINE_BYTES = 2 * 1024 * 1024
         private const val MAX_HISTORY = 5000
         private const val CHAT_SALT = "crocau-chat-v1"
@@ -114,6 +123,7 @@ class LanChatClient(
     private val executor = Executors.newCachedThreadPool()
     private val rooms = ConcurrentHashMap<String, Room>()
     private val peers = ConcurrentHashMap<String, Peer>()
+    private val activeDiscoveryScans = ConcurrentHashMap.newKeySet<ChatDiscoveryOperation>()
     private val files = ConcurrentHashMap<String, File>().apply {
         val index = File(dataDir, "files.json")
         if (index.isFile) runCatching {
@@ -124,21 +134,28 @@ class LanChatClient(
     }
     private val nodeId = randomHex(6)
     @Volatile private var server: ServerSocket? = null
+    @Volatile private var discoverySocket: DatagramSocket? = null
     @Volatile private var closed = false
 
+    @Synchronized
     fun start(): Result<Unit> = runCatching {
-        if (server != null) return@runCatching Unit
-        val listener = ServerSocket(TCP_PORT, 32, InetAddress.getByName("0.0.0.0"))
-        server = listener
-        executor.execute {
-            while (!closed) {
-                try {
-                    val socket = listener.accept()
-                    executor.execute { serve(socket) }
-                } catch (_: Exception) {
-                    if (!closed) onChanged()
+        if (!closed) {
+            if (server == null) {
+                val listener = ServerSocket(TCP_PORT, 32, InetAddress.getByName("0.0.0.0"))
+                server = listener
+                executor.execute {
+                    while (!closed) {
+                        try {
+                            val socket = listener.accept()
+                            executor.execute { serve(socket) }
+                        } catch (_: Exception) {
+                            if (!closed) onChanged()
+                        }
+                    }
                 }
             }
+            // Discovery is optional: a UDP bind failure must not fail TCP startup.
+            startDiscoveryResponder()
         }
     }
 
@@ -164,6 +181,22 @@ class LanChatClient(
     fun messages(roomId: String): List<ChatMessage> = rooms[roomId]?.messages?.toList().orEmpty()
 
     fun peerCount(): Int = peers.size
+
+    fun discoverChatPeers(onComplete: (Result<List<LanChatPeer>>) -> Unit): ChatDiscoveryOperation {
+        val operation = ChatDiscoveryOperation()
+        activeDiscoveryScans.add(operation)
+        runCatching {
+            executor.execute {
+                val result = runCatching { operation.scan(nodeId) }
+                activeDiscoveryScans.remove(operation)
+                if (!closed && !operation.isCancelled()) onComplete(result)
+            }
+        }.onFailure { error ->
+            activeDiscoveryScans.remove(operation)
+            onComplete(Result.failure(error))
+        }
+        return operation
+    }
 
     fun connect(address: String): Result<Unit> = runCatching {
         val raw = address.trim()
@@ -264,11 +297,71 @@ class LanChatClient(
         throw failure ?: IllegalStateException("Download failed.")
     }
 
+    @Synchronized
     override fun close() {
         closed = true
+        activeDiscoveryScans.forEach(ChatDiscoveryOperation::cancel)
+        activeDiscoveryScans.clear()
         runCatching { server?.close() }
+        runCatching { discoverySocket?.close() }
+        discoverySocket = null
         peers.values.forEach { runCatching { it.socket.close() } }
         executor.shutdownNow()
+    }
+
+    /** Binds the Windows-compatible UDP discovery port and answers valid probes. */
+    private fun startDiscoveryResponder() {
+        if (closed || discoverySocket != null) return
+        val socket = runCatching {
+            DatagramSocket(null).apply {
+                reuseAddress = true
+                bind(InetSocketAddress("0.0.0.0", DISCOVERY_PORT))
+            }
+        }.getOrNull() ?: return
+        discoverySocket = socket
+        try {
+            executor.execute { serveDiscovery(socket) }
+        } catch (_: Exception) {
+            if (discoverySocket === socket) discoverySocket = null
+            runCatching { socket.close() }
+        }
+    }
+
+    private fun serveDiscovery(socket: DatagramSocket) {
+        val buffer = ByteArray(MAX_DISCOVERY_REQUEST_BYTES + 1)
+        val requestPrefix = DISCOVERY_REQUEST_PREFIX.toByteArray(StandardCharsets.US_ASCII)
+        val responsePrefix = DISCOVERY_RESPONSE_PREFIX.toByteArray(StandardCharsets.US_ASCII)
+        val responseJson = JsonObject().apply {
+            addProperty("id", nodeId)
+            addProperty("port", TCP_PORT)
+        }.toString().toByteArray(StandardCharsets.UTF_8)
+        val response = responsePrefix + responseJson
+
+        while (!closed && !socket.isClosed) {
+            try {
+                val packet = DatagramPacket(buffer, buffer.size)
+                socket.receive(packet)
+                val length = packet.length
+                if (length <= requestPrefix.size || length > MAX_DISCOVERY_REQUEST_BYTES) continue
+                if (!requestPrefix.indices.all { buffer[packet.offset + it] == requestPrefix[it] }) continue
+
+                val requesterId = runCatching {
+                    StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(buffer, packet.offset + requestPrefix.size, length - requestPrefix.size))
+                        .toString()
+                }.getOrNull() ?: continue
+                if (requesterId.isBlank() || requesterId.length > MAX_DISCOVERY_REQUEST_BYTES ||
+                    requesterId.any { it.isWhitespace() || Character.isISOControl(it) } || requesterId == nodeId
+                ) continue
+
+                socket.send(DatagramPacket(response, response.size, packet.address, packet.port))
+            } catch (_: Exception) {
+                if (!closed && !socket.isClosed) continue
+                break
+            }
+        }
     }
 
     private fun serve(socket: Socket) {

@@ -215,6 +215,43 @@ internal fun validateManualPathFiles(paths: List<String>): List<File> {
     }
 }
 
+internal data class ManualPathSource(val file: File, val relativePath: String)
+
+/** Collects regular files from absolute file or folder paths without following symbolic links. */
+internal fun collectManualPathSources(paths: List<String>, maxFiles: Int = MAX_MANUAL_PATH_FILES): List<ManualPathSource> {
+    require(paths.isNotEmpty()) { "Enter at least one absolute file or folder path." }
+    require(maxFiles > 0) { "The file limit must be positive." }
+    val result = mutableListOf<ManualPathSource>()
+    val seen = mutableSetOf<String>()
+
+    paths.forEach { path ->
+        val source = File(path)
+        require(source.isAbsolute) { "Enter an absolute Android file or folder path." }
+        require(source.exists()) { "File or folder does not exist: $path" }
+        require(source.canRead()) { "File or folder is not readable by Crocaun: $path" }
+        if (source.isFile) {
+            val canonical = source.canonicalPath
+            if (seen.add(canonical)) result += ManualPathSource(source, source.name)
+        } else {
+            require(source.isDirectory) { "Path is not a regular file or folder: $path" }
+            val root = source.canonicalFile
+            source.walkTopDown().forEach { child ->
+                if (child == source || !child.isFile) return@forEach
+                require(child.canRead()) { "File is not readable by Crocaun: ${child.absolutePath}" }
+                val canonical = child.canonicalPath
+                if (seen.add(canonical)) {
+                    val relative = child.relativeTo(source).invariantSeparatorsPath
+                    result += ManualPathSource(child, "${root.name}/$relative")
+                    require(result.size <= maxFiles) { "Folder selection exceeds the $maxFiles-file limit." }
+                }
+            }
+        }
+        require(result.size <= maxFiles) { "Folder selection exceeds the $maxFiles-file limit." }
+    }
+    require(result.isNotEmpty()) { "The selected folder contains no regular files." }
+    return result
+}
+
 private fun ipv4Octets(ipv4: String): IntArray? {
     val parts = ipv4.split('.')
     if (parts.size != 4) return null
@@ -234,5 +271,6 @@ private fun longToIpv4(value: Long): String = listOf(24, 16, 8, 0)
 
 private const val IPV4_MASK = 0xffff_ffffL
 private const val MAX_PEER_NAME_LENGTH = 80
+private const val MAX_MANUAL_PATH_FILES = 10_000
 private const val ROLE_SEND = "send"
 private const val ROLE_RECEIVE = "recv"

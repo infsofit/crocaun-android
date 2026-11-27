@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,9 @@ internal class CrocTransferUiState {
     var sendPeers by mutableStateOf<List<LanPeer>>(emptyList())
     var sendLanPeer by mutableStateOf<LanPeer?>(null)
     var receivePassword by mutableStateOf("")
+    var receiveTreeUri by mutableStateOf<String?>(null)
+    var receiveDirectoryPath by mutableStateOf("")
+    var unpackReceivedZips by mutableStateOf(false)
     var receiveStatus by mutableStateOf<String?>(null)
     var receiveError by mutableStateOf<String?>(null)
     var receiveDiscoveryBusy by mutableStateOf(false)
@@ -92,6 +96,25 @@ internal fun CrocSendScreen(controller: CrocTransferController, state: CrocTrans
             controller.discard(state.selectedSendItems)
             state.selectedSendItems = emptyList()
             controller.stageSelectedDocuments(uris) { result ->
+                state.stagingSend = false
+                result.onSuccess { items ->
+                    state.selectedSendItems = items
+                    state.sendStatus = context.getString(R.string.transfer_files_ready, items.size)
+                }.onFailure { error ->
+                    state.sendStatus = null
+                    state.sendError = readableError(context.getString(R.string.transfer_stage_failed), error, state.sendPassword)
+                }
+            }
+        }
+    }
+    val selectFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            state.sendError = null
+            state.sendStatus = context.getString(R.string.transfer_staging_folder)
+            state.stagingSend = true
+            controller.discard(state.selectedSendItems)
+            state.selectedSendItems = emptyList()
+            controller.stageSelectedFolder(uri) { result ->
                 state.stagingSend = false
                 result.onSuccess { items ->
                     state.selectedSendItems = items
@@ -173,6 +196,18 @@ internal fun CrocSendScreen(controller: CrocTransferController, state: CrocTrans
             Icon(Icons.Filled.AttachFile, contentDescription = null)
             Text(stringResource(R.string.transfer_choose_files), modifier = Modifier.padding(start = 8.dp))
         }
+        OutlinedButton(
+            enabled = !state.busy && !state.stagingSend && !state.exporting,
+            onClick = { selectFolder.launch(null) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.transfer_choose_folder))
+        }
+        Text(
+            stringResource(R.string.transfer_folder_flatten_notice),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(stringResource(R.string.transfer_manual_paths_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(stringResource(R.string.transfer_manual_paths_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
@@ -320,6 +355,37 @@ internal fun CrocReceiveScreen(controller: CrocTransferController, state: CrocTr
         }
     }
 
+    val receivePreferences = remember(context) { context.getSharedPreferences("crocaun-receive", android.content.Context.MODE_PRIVATE) }
+    LaunchedEffect(receivePreferences) {
+        state.receiveTreeUri = receivePreferences.getString("tree-uri", null)
+        state.receiveDirectoryPath = receivePreferences.getString("directory-path", "").orEmpty()
+        state.unpackReceivedZips = receivePreferences.getBoolean("unpack-zips", false)
+    }
+    val chooseReceiveFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val permission = runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            if (permission.isSuccess) {
+                state.receiveTreeUri = uri.toString()
+                state.receiveDirectoryPath = ""
+                state.receiveError = null
+                receivePreferences.edit().putString("tree-uri", uri.toString()).remove("directory-path").apply()
+            } else {
+                state.receiveTreeUri = null
+                receivePreferences.edit().remove("tree-uri").apply()
+                state.receiveError = readableError(
+                    context.getString(R.string.transfer_saf_permission_failed),
+                    permission.exceptionOrNull() ?: IllegalStateException("No persistable folder permission was returned."),
+                    state.receivePassword,
+                )
+            }
+        }
+    }
+
     fun startReceiveDiscovery() {
         state.receiveError = null
         state.receivePeers = emptyList()
@@ -344,6 +410,41 @@ internal fun CrocReceiveScreen(controller: CrocTransferController, state: CrocTr
     ) {
         Text(stringResource(R.string.transfer_receive_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(stringResource(R.string.transfer_receive_description), style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.transfer_receive_folder_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(
+            enabled = !state.busy && !state.exporting,
+            onClick = { chooseReceiveFolder.launch(null) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(R.string.transfer_choose_receive_folder)) }
+        state.receiveTreeUri?.let { Text(stringResource(R.string.transfer_receive_saf_selected), color = MaterialTheme.colorScheme.primary) }
+        OutlinedTextField(
+            value = state.receiveDirectoryPath,
+            onValueChange = { path ->
+                state.receiveDirectoryPath = path
+                if (path.isNotBlank()) {
+                    state.receiveTreeUri = null
+                    receivePreferences.edit().remove("tree-uri").putString("directory-path", path).apply()
+                } else {
+                    receivePreferences.edit().remove("directory-path").apply()
+                }
+            },
+            label = { Text(stringResource(R.string.transfer_receive_path_label)) },
+            singleLine = true,
+            enabled = !state.busy && !state.exporting,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(stringResource(R.string.transfer_receive_path_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.Checkbox(
+                checked = state.unpackReceivedZips,
+                onCheckedChange = { enabled ->
+                    state.unpackReceivedZips = enabled
+                    receivePreferences.edit().putBoolean("unpack-zips", enabled).apply()
+                },
+                enabled = !state.busy,
+            )
+            Text(stringResource(R.string.transfer_unpack_zip_option))
+        }
         Text(stringResource(R.string.transfer_local_devices_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(stringResource(R.string.transfer_find_waiting_senders_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedButton(
@@ -396,13 +497,33 @@ internal fun CrocReceiveScreen(controller: CrocTransferController, state: CrocTr
                 controller.receive(
                     password = state.receivePassword,
                     relayAddress = state.receiveLanPeer?.relayAddress().orEmpty(),
+                    unpackZipArchives = state.unpackReceivedZips,
                     onStatus = { status -> if (state.busy) state.receiveStatus = displayStatus(context, status) },
                     onComplete = { result ->
                         state.busy = false
-                        result.onSuccess { items ->
-                            state.receivedItems = state.receivedItems + items
-                            state.receiveStatus = context.getString(R.string.transfer_receive_complete, items.size)
+                        result.onSuccess { batch ->
                             state.receivePassword = ""
+                            val warnings = batch.warnings.joinToString("\n").takeIf(String::isNotBlank)
+                            val treeUri = state.receiveTreeUri?.let { AndroidUri.parse(it) }
+                            val manualPath = state.receiveDirectoryPath.trim()
+                            if (treeUri != null || manualPath.isNotBlank()) {
+                                state.exporting = true
+                                controller.saveReceivedItems(batch.items, treeUri, manualPath) { saveResult ->
+                                    state.exporting = false
+                                    state.receivedItems = state.receivedItems + saveResult.remainingItems
+                                    state.receiveStatus = context.getString(
+                                        R.string.transfer_auto_save_complete,
+                                        saveResult.savedCount,
+                                        saveResult.remainingItems.size,
+                                    )
+                                    val saveError = saveResult.error?.message?.takeIf(String::isNotBlank)
+                                    state.receiveError = listOfNotNull(warnings, saveError).joinToString("\n").takeIf(String::isNotBlank)
+                                }
+                            } else {
+                                state.receivedItems = state.receivedItems + batch.items
+                                state.receiveStatus = context.getString(R.string.transfer_receive_complete, batch.items.size)
+                                state.receiveError = warnings
+                            }
                         }.onFailure { error ->
                             state.receiveStatus = null
                             state.receiveError = readableError(context.getString(R.string.transfer_receive_failed), error, state.receivePassword)
@@ -494,6 +615,12 @@ internal fun CrocSettingsScreen(controller: CrocTransferController, state: CrocT
                     Text(check.address, fontWeight = FontWeight.SemiBold)
                     Text(result, color = if (check.available) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                 }
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.transfer_proxy_status_title), fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.transfer_proxy_status_help), style = MaterialTheme.typography.bodySmall)
             }
         }
     }

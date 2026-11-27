@@ -11,7 +11,7 @@
     <string name="transfer_send_title">Send files with Croc</string>
     <string name="transfer_send_description">Choose one or more files and enter the same room password as your Windows peer.</string>
     <string name="transfer_receive_title">Receive Croc files</string>
-    <string name="transfer_receive_description">Enter the room password used on the sending device. Received files stay in private app storage until you export them.</string>
+    <string name="transfer_receive_description">Enter the room password used on the sending device. Received files are saved to your configured folder when possible; otherwise they remain in private app storage for export.</string>
     <string name="transfer_password">Room password</string>
     <string name="transfer_choose_files">Choose files</string>
     <string name="transfer_selected_files">Selected files (%1$d)</string>
@@ -32,10 +32,11 @@
     <string name="transfer_stage_failed">Could not prepare the selected files</string>
     <string name="transfer_send_failed">Send failed</string>
     <string name="transfer_receive_failed">Receive failed</string>
+    <string name="transfer_saf_permission_failed">This file provider did not grant persistent folder access. Choose another folder or enter a path.</string>
     <string name="transfer_export_failed">Export failed</string>
-    <string name="transfer_keep_open">Keep Crocaun open during transfer. Foreground service, cancellation, byte-level progress, and folder selection are still in development.</string>
+    <string name="transfer_keep_open">Keep Crocaun open during transfer. Background service, cancellation, and byte-level progress are still in development.</string>
     <string name="transfer_manual_paths_title">Manual file paths</string>
-    <string name="transfer_manual_paths_help">Enter one absolute Android file path per line. Crocaun copies readable files into private staging before sending.</string>
+    <string name="transfer_manual_paths_help">Enter an absolute file or folder path per line. Crocaun copies readable files into private staging before sending.</string>
     <string name="transfer_manual_paths_label">Absolute file paths</string>
     <string name="transfer_manual_staging">Copying files from the entered paths…</string>
     <string name="transfer_stage_manual_paths">Prepare files from paths</string>
@@ -61,5 +62,17 @@
     <string name="transfer_relay_check_failed">Relay check failed</string>
     <string name="transfer_relay_available">Available · %1$d ms</string>
     <string name="transfer_relay_unavailable">Unavailable · %1$s</string>
+    <string name="transfer_choose_folder">Choose a folder with a file manager</string>
+    <string name="transfer_folder_flatten_notice">Folder contents are sent as individual files; the Croc transfer protocol does not preserve nested folder structure.</string>
+    <string name="transfer_staging_folder">Preparing files from the selected folder…</string>
+    <string name="transfer_auto_save_complete">Saved %1$d file(s). %2$d file(s) remain available for export.</string>
+    <string name="transfer_receive_folder_title">Default receive folder</string>
+    <string name="transfer_choose_receive_folder">Choose receive folder with a file manager</string>
+    <string name="transfer_receive_saf_selected">A SAF folder is selected. Received files will be saved there.</string>
+    <string name="transfer_receive_path_label">Absolute folder path (optional)</string>
+    <string name="transfer_receive_path_help">SAF folder selection is preferred. A manual path may require Android All files access; failed saves stay available below.</string>
+    <string name="transfer_unpack_zip_option">Safely unpack received ZIP files (keep original archives)</string>
+    <string name="transfer_proxy_status_title">Proxy support</string>
+    <string name="transfer_proxy_status_help">Not implemented yet. Proxy settings will appear here only after proxy routing works for the supported network features; no inactive proxy controls are shown.</string>
     <string name="version_label">Version %1$s</string>
 </resources>

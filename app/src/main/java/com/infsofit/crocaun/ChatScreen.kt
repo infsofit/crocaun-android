@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import com.infsofit.crocaun.chat.ChatFile
 import com.infsofit.crocaun.chat.ChatMessage
 import com.infsofit.crocaun.chat.LanChatClient
+import com.infsofit.crocaun.chat.ChatDiscoveryOperation
+import com.infsofit.crocaun.chat.LanChatPeer
 import java.text.DateFormat
 import java.util.Date
 
@@ -53,6 +55,11 @@ internal fun ChatScreen(client: LanChatClient, startupError: String?, revision: 
     var roomLabel by remember { mutableStateOf("Room") }
     var roomPassword by remember { mutableStateOf("") }
     var peerAddress by remember { mutableStateOf("") }
+    var showInternetChat by remember { mutableStateOf(false) }
+    var discoveryBusy by remember(client) { mutableStateOf(false) }
+    var discoveryStatus by remember(client) { mutableStateOf<String?>(null) }
+    var discoveredPeers by remember(client) { mutableStateOf<List<LanChatPeer>>(emptyList()) }
+    var discoveryOperation by remember(client) { mutableStateOf<ChatDiscoveryOperation?>(null) }
     var draft by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var pendingDownload by remember { mutableStateOf<ChatFile?>(null) }
@@ -81,13 +88,59 @@ internal fun ChatScreen(client: LanChatClient, startupError: String?, revision: 
         if (selectedRoomId == null && rooms.isNotEmpty()) selectedRoomId = rooms.first().first
     }
     val selected = selectedRoomId?.let { id -> rooms.firstOrNull { it.first == id } }
+    fun startChatDiscovery() {
+        discoveredPeers = emptyList()
+        discoveryStatus = "Searching this LAN using UDP 29015…"
+        discoveryBusy = true
+        discoveryOperation = client.discoverChatPeers { result ->
+            mainHandler.post {
+                discoveryBusy = false
+                discoveryOperation = null
+                result.onSuccess { peers ->
+                    discoveredPeers = peers
+                    discoveryStatus = "Chat devices found: ${peers.size}"
+                }.onFailure { error ->
+                    discoveryStatus = "Device search failed: ${error.message.orEmpty()}"
+                }
+            }
+        }
+    }
+
     val messages = remember(revision, selectedRoomId) { selectedRoomId?.let(client::messages).orEmpty() }
 
+    if (showInternetChat) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Internet chat", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showInternetChat = false }) { Text("LAN chat") }
+                OutlinedButton(onClick = { }) { Text("Internet chat · not implemented") }
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Internet chat is separate from LAN chat and is not implemented yet.", fontWeight = FontWeight.SemiBold)
+                    Text("The Windows Internet/Nostr chat protocol and its compatible networking are still pending. This view does not connect or send messages.")
+                    Text("Proxy settings are also deferred until proxy routing is implemented end to end.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        return
+    }
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("LAN chat", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { showInternetChat = false }) { Text("LAN chat · selected") }
+            OutlinedButton(onClick = {
+                discoveryOperation?.cancel()
+                discoveryBusy = false
+                showInternetChat = true
+            }) { Text("Internet chat") }
+        }
         Text(
             text = if (startupError != null) "Chat listener unavailable: $startupError" else "${client.peerCount()} connected · TCP 29014",
             style = MaterialTheme.typography.bodySmall,
@@ -106,9 +159,36 @@ internal fun ChatScreen(client: LanChatClient, startupError: String?, revision: 
             }
         }
         Text(
-            "Devices must be on a reachable LAN/VPN. Automatic discovery and Internet chat are not enabled yet.",
+            "LAN chat uses TCP 29014. Device search uses UDP 29015 and needs a reachable local network; Internet/Nostr chat is a separate, unfinished feature.",
             style = MaterialTheme.typography.bodySmall,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(enabled = !discoveryBusy && startupError == null, onClick = { startChatDiscovery() }) {
+                Text("Find LAN devices")
+            }
+            if (discoveryBusy) {
+                OutlinedButton(onClick = {
+                    discoveryOperation?.cancel()
+                    discoveryOperation = null
+                    discoveryBusy = false
+                    discoveryStatus = "Device search cancelled."
+                }) { Text("Cancel") }
+            }
+        }
+        discoveryStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+        discoveredPeers.forEach { peer ->
+            OutlinedButton(
+                enabled = startupError == null,
+                onClick = {
+                    val address = "${peer.address}:${peer.port}"
+                    peerAddress = address
+                    error = client.connect(address).exceptionOrNull()?.message ?: "Connecting to ${peer.address}…"
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("${peer.id} — ${peer.address}:${peer.port}")
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(roomLabel, { roomLabel = it }, label = { Text("Room") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedTextField(roomPassword, { roomPassword = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.weight(1f))

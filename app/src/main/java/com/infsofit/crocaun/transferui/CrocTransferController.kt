@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import com.infsofit.crocaun.transfer.Transfer
 import com.infsofit.crocaun.transfer.TransferSession
 import org.json.JSONArray
@@ -34,6 +36,17 @@ internal data class RelayServerCheck(
     val error: String?,
 )
 
+internal data class ReceiveBatch(
+    val items: List<TransferItem>,
+    val warnings: List<String> = emptyList(),
+)
+
+internal data class ReceiveSaveResult(
+    val remainingItems: List<TransferItem>,
+    val savedCount: Int,
+    val error: Throwable? = null,
+)
+
 internal class CrocTransferController(context: Context) : Closeable {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -52,6 +65,13 @@ internal class CrocTransferController(context: Context) : Closeable {
     fun stageSelectedDocuments(uris: List<Uri>, onComplete: (Result<List<TransferItem>>) -> Unit) {
         worker.execute {
             val result = runCatching { copyDocumentsToPrivateStaging(uris) }
+            mainHandler.post { onComplete(result) }
+        }
+    }
+
+    fun stageSelectedFolder(treeUri: Uri, onComplete: (Result<List<TransferItem>>) -> Unit) {
+        worker.execute {
+            val result = runCatching { copyDocumentTreeToPrivateStaging(treeUri) }
             mainHandler.post { onComplete(result) }
         }
     }
@@ -127,8 +147,9 @@ internal class CrocTransferController(context: Context) : Closeable {
     fun receive(
         password: String,
         relayAddress: String = "",
+        unpackZipArchives: Boolean = false,
         onStatus: (String) -> Unit,
-        onComplete: (Result<List<TransferItem>>) -> Unit,
+        onComplete: (Result<ReceiveBatch>) -> Unit,
     ) {
         worker.execute {
             val stagingDirectory = try {
@@ -156,12 +177,195 @@ internal class CrocTransferController(context: Context) : Closeable {
                     }
                     .toList()
                 if (items.isEmpty()) throw IOException("The transfer completed without a file.")
-                Result.success(items)
+                val receivedItems = items.toMutableList()
+                val warnings = mutableListOf<String>()
+                if (unpackZipArchives) {
+                    items.forEach { archive ->
+                        if (!archive.file.name.endsWith(".zip", ignoreCase = true)) return@forEach
+                        runCatching { extractZipArchive(archive.file, stagingDirectory) }
+                            .onSuccess { extractedFiles ->
+                                val archiveBaseName = archive.file.name.dropLast(4).ifBlank { "archive" }
+                                val extractionRoot = File(stagingDirectory, "${windowsCompatibleFileName(archiveBaseName)}-unpacked")
+                                extractedFiles.forEach { file ->
+                                    val relative = file.relativeTo(extractionRoot).path.replace(File.separatorChar, '/')
+                                    receivedItems += TransferItem(file, file.name, relative, extractionRoot)
+                                }
+                            }
+                            .onFailure { error -> warnings += "${archive.displayName}: ${error.message.orEmpty()}" }
+                    }
+                }
+                Result.success(ReceiveBatch(receivedItems, warnings))
             } catch (error: Exception) {
                 deleteStagingDirectory(stagingDirectory)
                 Result.failure(error)
             }
             mainHandler.post { onComplete(result) }
+        }
+    }
+
+    fun saveReceivedItems(
+        items: List<TransferItem>,
+        treeUri: Uri?,
+        directoryPath: String,
+        onComplete: (ReceiveSaveResult) -> Unit,
+    ) {
+        worker.execute {
+            val remaining = mutableListOf<TransferItem>()
+            var savedCount = 0
+            var firstError: Throwable? = null
+            items.forEach { item ->
+                runCatching {
+                    when {
+                        treeUri != null -> saveItemToDocumentTree(item, treeUri)
+                        directoryPath.isNotBlank() -> saveItemToDirectory(item, directoryPath)
+                        else -> throw IOException("Choose a SAF folder or enter an absolute receive folder path first.")
+                    }
+                }.onSuccess {
+                    savedCount++
+                }.onFailure { error ->
+                    remaining += item
+                    if (firstError == null) firstError = error
+                }
+            }
+            val result = ReceiveSaveResult(remaining, savedCount, firstError)
+            mainHandler.post { onComplete(result) }
+        }
+    }
+
+    private fun saveItemToDirectory(item: TransferItem, directoryPath: String) {
+        val requestedRoot = File(directoryPath.trim())
+        if (!requestedRoot.isAbsolute) throw IOException("Enter an absolute receive folder path.")
+        val root = requestedRoot.canonicalFile
+        if (!root.exists() && !root.mkdirs()) throw IOException("Could not create the receive folder: $root")
+        if (!root.isDirectory || !root.canWrite()) throw IOException("The receive folder is not writable: $root")
+        val components = safeRelativeComponents(item.relativePath.ifBlank { item.displayName })
+        var parent = root
+        components.dropLast(1).forEach { component ->
+            parent = File(parent, windowsCompatibleFileName(component))
+            if (!parent.exists() && !parent.mkdir()) throw IOException("Could not create receive subfolder: $parent")
+            val parentPath = parent.canonicalPath
+            val rootPrefix = if (root.path.endsWith(File.separator)) root.path else root.path + File.separator
+            if (!parent.isDirectory || !parentPath.startsWith(rootPrefix)) {
+                throw IOException("The receive subfolder is outside the selected folder.")
+            }
+        }
+        val safeName = windowsCompatibleFileName(components.lastOrNull() ?: item.displayName)
+        val destination = uniqueFilesystemChild(parent, safeName)
+        copyReceivedFile(item, destination)
+    }
+
+    private fun saveItemToDocumentTree(item: TransferItem, treeUri: Uri) {
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        var parentId = rootId
+        var parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId)
+        val components = safeRelativeComponents(item.relativePath.ifBlank { item.displayName })
+        components.dropLast(1).forEach { component ->
+            val safeComponent = windowsCompatibleFileName(component)
+            val existing = findTreeChild(treeUri, parentId, safeComponent)
+            if (existing != null && existing.second == DocumentsContract.Document.MIME_TYPE_DIR) {
+                parentId = existing.first
+                parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, parentId)
+            } else {
+                val folderName = uniqueTreeChildName(treeUri, parentId, safeComponent)
+                val folderUri = DocumentsContract.createDocument(
+                    appContext.contentResolver,
+                    parentUri,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    folderName,
+                ) ?: throw IOException("The selected file manager could not create folder $folderName.")
+                parentId = DocumentsContract.getDocumentId(folderUri)
+                parentUri = folderUri
+            }
+        }
+        val safeName = windowsCompatibleFileName(components.lastOrNull() ?: item.displayName)
+        val outputName = uniqueTreeChildName(treeUri, parentId, safeName)
+        val extension = outputName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+        val destination = DocumentsContract.createDocument(appContext.contentResolver, parentUri, mimeType, outputName)
+            ?: throw IOException("The selected file manager could not create $outputName.")
+        try {
+            val output = appContext.contentResolver.openOutputStream(destination)
+                ?: throw IOException("Android could not write $outputName.")
+            item.file.inputStream().use { input -> output.use { target -> input.copyTo(target, DEFAULT_BUFFER_SIZE) } }
+            item.file.delete()
+            deleteIfEmpty(item.stagingDirectory)
+        } catch (error: Exception) {
+            runCatching { DocumentsContract.deleteDocument(appContext.contentResolver, destination) }
+            throw error
+        }
+    }
+
+    private fun copyReceivedFile(item: TransferItem, destination: File) {
+        if (!destination.createNewFile()) throw IOException("Could not create destination without overwriting: $destination")
+        try {
+            item.file.inputStream().use { input ->
+                FileOutputStream(destination).use { output -> input.copyTo(output, DEFAULT_BUFFER_SIZE) }
+            }
+            item.file.delete()
+            deleteIfEmpty(item.stagingDirectory)
+        } catch (error: Exception) {
+            destination.delete()
+            throw error
+        }
+    }
+
+    private fun safeRelativeComponents(path: String): List<String> {
+        val normalized = path.replace('\\', '/')
+        if (normalized.startsWith('/') || Regex("^[A-Za-z]:").containsMatchIn(normalized)) {
+            throw IOException("Received file path must be relative to its destination folder.")
+        }
+        val rawComponents = normalized.split('/').filter { it.isNotBlank() && it != "." }
+        if (rawComponents.any { it == ".." }) throw IOException("Received file path traverses its destination folder.")
+        val components = rawComponents
+        if (components.isEmpty()) throw IOException("Received file has no usable filename.")
+        return components
+    }
+
+    private fun uniqueFilesystemChild(parent: File, safeName: String): File {
+        var candidate = File(parent, safeName)
+        if (!candidate.exists()) return candidate
+        val extensionStart = safeName.lastIndexOf('.').takeIf { it > 0 } ?: safeName.length
+        val base = safeName.substring(0, extensionStart)
+        val extension = safeName.substring(extensionStart)
+        var serial = 2
+        while (true) {
+            candidate = File(parent, "$base ($serial)$extension")
+            if (!candidate.exists()) return candidate
+            serial++
+        }
+    }
+
+    private fun findTreeChild(treeUri: Uri, parentId: String, name: String): Pair<String, String>? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+        return appContext.contentResolver.query(
+            childrenUri,
+            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameColumn)?.equals(name, ignoreCase = true) == true) {
+                    return@use cursor.getString(idColumn) to cursor.getString(mimeColumn)
+                }
+            }
+            null
+        }
+    }
+
+    private fun uniqueTreeChildName(treeUri: Uri, parentId: String, safeName: String): String {
+        if (findTreeChild(treeUri, parentId, safeName) == null) return safeName
+        val extensionStart = safeName.lastIndexOf('.').takeIf { it > 0 } ?: safeName.length
+        val base = safeName.substring(0, extensionStart)
+        val extension = safeName.substring(extensionStart)
+        var serial = 2
+        while (true) {
+            val candidate = "$base ($serial)$extension"
+            if (findTreeChild(treeUri, parentId, candidate) == null) return candidate
+            serial++
         }
     }
 
@@ -191,20 +395,27 @@ internal class CrocTransferController(context: Context) : Closeable {
 
     private fun copyDocumentsToPrivateStaging(uris: List<Uri>): List<TransferItem> {
         if (uris.isEmpty()) throw IOException("No files were selected.")
+        val sources = uris.map { uri ->
+            val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "crocaun-file"
+            DocumentSource(uri, name, name)
+        }
+        return copyDocumentSourcesToPrivateStaging(sources)
+    }
+
+    private fun copyDocumentSourcesToPrivateStaging(sources: List<DocumentSource>): List<TransferItem> {
+        if (sources.isEmpty()) throw IOException("The selected folder contains no files.")
         val directory = newStagingDirectory("send")
         try {
-            val originalNames = uris.map { uri ->
-                queryDisplayName(uri) ?: uri.lastPathSegment ?: "crocaun-file"
-            }
-            val safeNames = uniqueWindowsCompatibleFileNames(originalNames)
-            return uris.mapIndexed { index, uri ->
-                val destination = File(directory, safeNames[index])
-                val input = appContext.contentResolver.openInputStream(uri)
-                    ?: throw IOException("Android could not read ${safeNames[index]}.")
-                input.use { source ->
-                    FileOutputStream(destination).use { target -> source.copyTo(target, DEFAULT_BUFFER_SIZE) }
+            val safeNames = uniqueWindowsCompatibleFileNames(sources.map { it.name })
+            return sources.mapIndexed { index, source ->
+                val safeName = safeNames[index]
+                val destination = File(directory, safeName)
+                val input = appContext.contentResolver.openInputStream(source.uri)
+                    ?: throw IOException("Android could not read $safeName.")
+                input.use { sourceStream ->
+                    FileOutputStream(destination).use { target -> sourceStream.copyTo(target, DEFAULT_BUFFER_SIZE) }
                 }
-                TransferItem(destination, safeNames[index], safeNames[index], directory)
+                TransferItem(destination, safeName, source.relativePath, directory)
             }
         } catch (error: Exception) {
             deleteStagingDirectory(directory)
@@ -213,23 +424,73 @@ internal class CrocTransferController(context: Context) : Closeable {
     }
 
     private fun copyManualPathsToPrivateStaging(input: String): List<TransferItem> {
-        val sources = validateManualPathFiles(parseManualPathInput(input))
+        val sources = collectManualPathSources(parseManualPathInput(input))
         val directory = newStagingDirectory("send")
         try {
-            val safeNames = uniqueWindowsCompatibleFileNames(sources.map(File::getName))
+            val safeNames = uniqueWindowsCompatibleFileNames(sources.map { it.file.name })
             return sources.mapIndexed { index, source ->
                 val safeName = safeNames[index]
                 val destination = File(directory, safeName)
-                FileInputStream(source).use { inputStream ->
+                FileInputStream(source.file).use { inputStream ->
                     FileOutputStream(destination).use { output -> inputStream.copyTo(output, DEFAULT_BUFFER_SIZE) }
                 }
-                TransferItem(destination, safeName, safeName, directory)
+                TransferItem(destination, safeName, source.relativePath, directory)
             }
         } catch (error: Exception) {
             deleteStagingDirectory(directory)
             throw error
         }
     }
+
+    private fun copyDocumentTreeToPrivateStaging(treeUri: Uri): List<TransferItem> {
+        val sources = collectDocumentTreeSources(treeUri)
+        return copyDocumentSourcesToPrivateStaging(sources)
+    }
+
+    private fun collectDocumentTreeSources(treeUri: Uri): List<DocumentSource> {
+        val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }
+            .getOrElse { throw IOException("Android could not open the selected folder.", it) }
+        val visited = mutableSetOf<String>()
+        val sources = mutableListOf<DocumentSource>()
+
+        fun visit(parentId: String, prefix: String) {
+            if (!visited.add(parentId)) return
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+            appContext.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(idColumn) ?: continue
+                    val name = cursor.getString(nameColumn)?.takeIf(String::isNotBlank) ?: id.substringAfterLast('/')
+                    val relative = if (prefix.isEmpty()) name else "$prefix/$name"
+                    if (cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        visit(id, relative)
+                    } else {
+                        sources += DocumentSource(DocumentsContract.buildDocumentUriUsingTree(treeUri, id), name, relative)
+                        if (sources.size > MAX_FOLDER_FILES) {
+                            throw IOException("The selected folder exceeds the $MAX_FOLDER_FILES-file limit.")
+                        }
+                    }
+                }
+            } ?: throw IOException("Android could not list the selected folder.")
+        }
+
+        visit(rootId, "")
+        return sources
+    }
+
+    private data class DocumentSource(val uri: Uri, val name: String, val relativePath: String)
 
     private fun queryDisplayName(uri: Uri): String? {
         return appContext.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -287,6 +548,7 @@ internal class CrocTransferController(context: Context) : Closeable {
     private companion object {
         const val DEFAULT_BUFFER_SIZE = 64 * 1024
         const val DEFAULT_RELAY_CHECK_TIMEOUT_MS = 4_000L
+        const val MAX_FOLDER_FILES = 10_000
     }
 }
 

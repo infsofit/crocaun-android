@@ -11,7 +11,7 @@
     <string name="transfer_send_title">Отправить файлы через Croc</string>
     <string name="transfer_send_description">Выберите один или несколько файлов и введите пароль комнаты, совпадающий с паролем на Windows-устройстве.</string>
     <string name="transfer_receive_title">Получить файлы через Croc</string>
-    <string name="transfer_receive_description">Введите пароль комнаты отправителя. Полученные файлы хранятся в приватной папке приложения до экспорта.</string>
+    <string name="transfer_receive_description">Введите пароль комнаты отправителя. По возможности файлы сохраняются в заданную папку; иначе остаются в приватном хранилище приложения для экспорта.</string>
     <string name="transfer_password">Пароль комнаты</string>
     <string name="transfer_choose_files">Выбрать файлы</string>
     <string name="transfer_selected_files">Выбрано файлов: %1$d</string>
@@ -32,10 +32,11 @@
     <string name="transfer_stage_failed">Не удалось подготовить выбранные файлы</string>
     <string name="transfer_send_failed">Ошибка отправки</string>
     <string name="transfer_receive_failed">Ошибка получения</string>
+    <string name="transfer_saf_permission_failed">Файловый провайдер не предоставил постоянный доступ к папке. Выберите другую папку или укажите путь.</string>
     <string name="transfer_export_failed">Ошибка экспорта</string>
-    <string name="transfer_keep_open">Не закрывайте Crocaun во время передачи. Фоновая служба, отмена, отображение прогресса и выбор папок ещё разрабатываются.</string>
+    <string name="transfer_keep_open">Не закрывайте Crocaun во время передачи. Фоновая служба, отмена и отображение прогресса ещё разрабатываются.</string>
     <string name="transfer_manual_paths_title">Ручной ввод путей</string>
-    <string name="transfer_manual_paths_help">Введите абсолютный путь к каждому файлу Android с новой строки. Перед отправкой Crocaun копирует доступные файлы в приватную папку.</string>
+    <string name="transfer_manual_paths_help">Введите абсолютный путь к файлу или папке с новой строки. Перед отправкой Crocaun копирует доступные файлы в приватную папку.</string>
     <string name="transfer_manual_paths_label">Абсолютные пути к файлам</string>
     <string name="transfer_manual_staging">Копируем файлы по указанным путям…</string>
     <string name="transfer_stage_manual_paths">Подготовить файлы по путям</string>
@@ -61,5 +62,17 @@
     <string name="transfer_relay_check_failed">Не удалось проверить relay-серверы</string>
     <string name="transfer_relay_available">Доступен · %1$d мс</string>
     <string name="transfer_relay_unavailable">Недоступен · %1$s</string>
+    <string name="transfer_choose_folder">Выбрать папку в файловом менеджере</string>
+    <string name="transfer_folder_flatten_notice">Содержимое папки отправляется отдельными файлами; протокол Croc не сохраняет структуру вложенных папок.</string>
+    <string name="transfer_staging_folder">Подготавливаем файлы из выбранной папки…</string>
+    <string name="transfer_auto_save_complete">Сохранено файлов: %1$d. Осталось доступно для экспорта: %2$d.</string>
+    <string name="transfer_receive_folder_title">Папка получения по умолчанию</string>
+    <string name="transfer_choose_receive_folder">Выбрать папку получения в файловом менеджере</string>
+    <string name="transfer_receive_saf_selected">Выбрана папка SAF. Полученные файлы будут сохраняться в неё.</string>
+    <string name="transfer_receive_path_label">Абсолютный путь к папке (необязательно)</string>
+    <string name="transfer_receive_path_help">Предпочтителен выбор через SAF. Для ручного пути может потребоваться доступ Android ко всем файлам; при ошибке файлы останутся ниже для экспорта.</string>
+    <string name="transfer_unpack_zip_option">Безопасно распаковывать полученные ZIP-файлы (оригиналы сохраняются)</string>
+    <string name="transfer_proxy_status_title">Поддержка прокси</string>
+    <string name="transfer_proxy_status_help">Пока не реализована. Настройки появятся здесь после подключения рабочей маршрутизации; неработающие элементы управления не показываются.</string>
     <string name="version_label">Версия %1$s</string>
 </resources>
