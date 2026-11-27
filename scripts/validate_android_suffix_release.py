@@ -39,8 +39,6 @@ def exists(path: str) -> bool:
 def main() -> int:
     if len(sys.argv) != 2:
         raise ValueError("Usage: validate_android_suffix_release.py VERSION")
-    if os.environ.get("INTEROP_CONFIRMED", "").strip().lower() != "true":
-        raise ValueError("Set interop_confirmed=true only after the real Android↔Windows release gate passes.")
 
     parsed = parse_android_release_version(sys.argv[1])
     windows_tag = f"v{parsed.base_windows_version}"

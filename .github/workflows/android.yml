@@ -3,6 +3,9 @@ name: Android build and Windows release sync
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - README.md
+      - docs/**
   pull_request:
     branches: [main]
   schedule:
@@ -10,12 +13,12 @@ on:
   workflow_dispatch:
     inputs:
       android_version:
-        description: "Android-only version to publish after its release gates pass (e.g. 1.11-android.1)"
+        description: "Optional manually selected Android test-preview version (e.g. 1.11-android.2); main-branch code pushes choose the next suffix automatically"
         required: false
         type: string
       interop_confirmed:
-        description: "Set true only after real Android↔Windows interoperability tests pass"
-        required: true
+        description: "Set true only after real Android↔Windows interoperability tests pass; false still publishes a clearly marked test-only prerelease"
+        required: false
         default: false
         type: boolean
 
@@ -191,24 +194,32 @@ jobs:
           fi
 
   publish-android-suffix:
-    name: Publish Android-only ${{ inputs.android_version }}
-    if: github.event_name == 'workflow_dispatch' && inputs.android_version != ''
+    name: Publish Android test prerelease
+    if: >-
+      always() &&
+      ((github.event_name == 'push' && needs.discover.result == 'success' && needs.build-check.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.android_version != '' && needs.discover.result == 'success'))
     runs-on: ubuntu-latest
-    needs: discover
+    needs: [discover, build-check]
     permissions:
       contents: write
     steps:
-      - name: Check out current Android main
+      - name: Check out requested Android source
         uses: actions/checkout@v7
-        with:
-          ref: main
+
+      - name: Choose next Android test-preview version on main push
+        id: auto-version
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_VERSION: ${{ needs.discover.outputs.version_name }}
+        run: python3 scripts/next_android_preview.py "$BASE_VERSION"
 
       - name: Validate Android version and matching stable Windows release
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
-          ANDROID_VERSION: ${{ inputs.android_version }}
-          INTEROP_CONFIRMED: ${{ inputs.interop_confirmed }}
+          ANDROID_VERSION: ${{ steps.auto-version.outputs.android_version || inputs.android_version }}
         run: python3 scripts/validate_android_suffix_release.py "$ANDROID_VERSION"
 
       - name: Set up JDK 17
@@ -253,11 +264,17 @@ jobs:
           ANDROID_VERSION: ${{ steps.version.outputs.android_version }}
           BASE_WINDOWS_VERSION: ${{ steps.version.outputs.base_windows_version }}
           REPOSITORY: ${{ github.repository }}
+          INTEROP_CONFIRMED: ${{ inputs.interop_confirmed || false }}
         run: |
           set -euo pipefail
           apk="crocaun-android-${ANDROID_TAG}-preview.apk"
           source_sha="$(git rev-parse HEAD)"
-          notes="Android-only prerelease ${ANDROID_TAG}, based on stable Windows release v${BASE_WINDOWS_VERSION}. This tag does not create or modify a Windows release. The APK is debug-signed and is not a Google Play production build."
+          if [ "$INTEROP_CONFIRMED" = "true" ]; then
+            interop_status="Real-device Android↔Windows interoperability was confirmed by the maintainer."
+          else
+            interop_status="TEST-ONLY PREVIEW: the current Android changes have not yet been verified on real Android↔Windows devices. Please install and test this APK; do not treat it as a verified or production build."
+          fi
+          notes="Android-only prerelease ${ANDROID_TAG}, based on stable Windows release v${BASE_WINDOWS_VERSION}. ${interop_status} This tag does not create or modify a Windows release. The APK is debug-signed and is not a Google Play production build."
           gh release create "$ANDROID_TAG" "$apk" \
             --repo "$REPOSITORY" \
             --target "$source_sha" \
